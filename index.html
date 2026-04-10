@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Limb Darkening & Corona (HLSL -> WebGL)</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background: #010101; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        
+        /* UI Panel Styles */
+        #ui-panel {
+            position: absolute; top: 20px; right: 20px;
+            width: 320px; background: rgba(10, 10, 10, 0.92);
+            padding: 22px; border-radius: 14px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.8);
+            z-index: 10; border: 1px solid #444;
+            backdrop-filter: blur(8px);
+        }
+        #ui-panel h2 { margin-top: 0; font-size: 22px; color: #ffcc00; letter-spacing: 1px; margin-bottom: 8px; }
+        #ui-panel p { font-size: 13px; color: #aaa; margin-bottom: 22px; line-height: 1.5; }
+        
+        .control-group { margin-bottom: 18px; }
+        .control-group label { display: block; font-size: 12px; text-transform: uppercase; margin-bottom: 8px; display: flex; justify-content: space-between; color: #ddd; letter-spacing: 0.5px; }
+        .control-group label span.value { color: #ffcc00; font-family: monospace; font-size: 14px; font-weight: bold; }
+        .control-group input[type=range] { width: 100%; cursor: pointer; accent-color: #ffcc00; margin: 0; }
+        
+        /* Model Selector Styles */
+        .model-selector { display: flex; gap: 8px; margin-bottom: 20px; border: 1px solid #444; border-radius: 6px; overflow: hidden; }
+        .model-selector button { flex: 1; background: #1a1a1a; border: none; color: #888; padding: 10px; font-size: 11px; text-transform: uppercase; cursor: pointer; transition: all 0.2s; letter-spacing: 1px; }
+        .model-selector button:hover { background: #252525; color: #fff; }
+        .model-selector button.active { background: #ffcc00; color: #000; font-weight: bold; }
+
+        .footer { margin-top: 15px; font-size: 11px; color: #666; border-top: 1px solid #333; padding-top: 12px; text-align: center; letter-spacing: 0.5px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h2>Limb Darkening</h2>
+        <p>3D simulation of stellar atmosphere absorption. Simulates how a star appears darker towards its edge (limb).</p>
+        
+        <label style="font-size: 11px; text-transform: uppercase; color: #aaa; margin-bottom: 6px; display: block;">Darkening Model</label>
+        <div class="model-selector">
+            <button id="btn-quadratic" onclick="setModel(0)">Quadratic (Fast)</button>
+            <button id="btn-claret" onclick="setModel(1)" class="active">Claret 2000 (Accurate)</button>
+        </div>
+
+        <div class="control-group">
+            <label>Corona Sharpness <span id="val-coronaSharp" class="value">6.0</span></label>
+            <input type="range" id="coronaSharp" min="1.0" max="16.0" step="0.1" value="6.0">
+        </div>
+        
+        <div class="control-group">
+            <label>Corona Intensity <span id="val-coronaIntensity" class="value">0.30</span></label>
+            <input type="range" id="coronaIntensity" min="0.0" max="1.0" step="0.01" value="0.30">
+        </div>
+
+        <div class="control-group">
+            <label>Base Star Temp (K) <span id="val-starTemp" class="value">5778</span></label>
+            <input type="range" id="starTemp" min="3000" max="12000" step="50" value="5778">
+        </div>
+
+        <div class="footer">UE 5.7 Procedural Workflow Demo • STEP 3</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // --- GLOBAL VARIABLES ---
+        let scene, camera, renderer, sphere, material;
+        const startTime = Date.now();
+
+        // --- SHADERS (GLSL) ---
+        const _VS = `
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+            
+            void main() {
+                // Pass world normal to fragment shader
+                vNormal = normalize(normalMatrix * normal);
+                
+                // Calculate vertex position in model-view space for camera vector calculation
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                vViewPosition = -mvPosition.xyz;
+                
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+
+        const _FS = `
+            precision highp float;
+            
+            uniform float time;
+            uniform int modelIndex; // 0 = Quadratic, 1 = Claret
+            uniform float coronaSharp;
+            uniform float coronaIntensity;
+            uniform vec3 starBaseColor;
+            
+            varying vec3 vNormal;
+            varying vec3 vViewPosition;
+
+            // --- HLSL -> GLSL Implementation of SunLimb.ush ---
+
+            // mu = cos(theta): 1.0 at centre, 0.0 at limb
+            float computeMu(vec3 normal, vec3 viewDir) {
+                return clamp(dot(normal, viewDir), 0.0, 1.0);
+            }
+
+            // Quadratic law (Neckel & Labs 1994)
+            float limbQuadratic(float mu) {
+                return clamp(0.294 + 0.884 * mu - 0.178 * mu * mu, 0.0, 1.0);
+            }
+
+            // Claret 2000 (4-term accurate model, Teff=5778K)
+            float limbClaret(float mu) {
+                float sqmu = sqrt(max(mu, 0.0));
+                return clamp(1.0 
+                    - 0.4361 * (1.0 - sqmu) 
+                    - 0.2860 * (1.0 - mu) 
+                    - 0.1567 * (1.0 - mu * sqmu) 
+                    + 0.0885 * (1.0 - mu * mu), 
+                    0.0, 1.0);
+            }
+
+            // Corona rim glow (additive emissive at limb)
+            float coronaEdge(float mu, float sharpness) {
+                return pow(1.0 - mu, max(sharpness, 1.0));
+            }
+
+            // --- Simple Temp to Color approximation ---
+            // Input normalized T [0..1] -> Output linear RGB
+            vec3 getTemperatureColor(float t) {
+                // Simple gradient: Cool (Red) -> Hot (Blue)
+                vec3 c_cool = vec3(1.0, 0.2, 0.1); // 3000K
+                vec3 c_mid  = vec3(1.0, 0.9, 0.6); // 6000K
+                vec3 c_hot  = vec3(0.5, 0.8, 1.0); // 12000K
+                
+                if (t < 0.5) return mix(c_cool, c_mid, t * 2.0);
+                return mix(c_mid, c_hot, (t - 0.5) * 2.0);
+            }
+
+            // --- MAIN LOOP ---
+            void main() {
+                // Re-normalize interpolates (critical for smooth gradients on spheres)
+                vec3 normal = normalize(vNormal);
+                vec3 viewDir = normalize(vViewPosition);
+
+                // STEP 1: Compute Mu (cos theta)
+                float mu = computeMu(normal, viewDir);
+
+                // STEP 2: Calculate Limb Darkening Multiplier
+                float limbMult = (modelIndex == 1) ? limbClaret(mu) : limbQuadratic(mu);
+
+                // STEP 3: Apply darkening to base color
+                vec3 surfaceColor = starBaseColor * limbMult;
+
+                // STEP 4: Calculate Additive Corona Rim Glow
+                float corona = coronaEdge(mu, coronaSharp) * coronaIntensity;
+                
+                // Final Color (Surface + Additive Glow)
+                // Using warm color for corona glow
+                vec3 finalColor = surfaceColor + vec3(1.0, 0.8, 0.4) * corona;
+
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // --- APP INITIALIZATION ---
+        function init() {
+            scene = new THREE.Scene();
+            
+            // Perspective camera for 3D depth
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 2.5;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Create a detailed sphere (64x64 segments for smoothness)
+            const geometry = new THREE.SphereGeometry(1, 64, 64);
+            
+            // Initial color based on 5778K temp
+            const initialColor = kelvinToRGB(5778);
+
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    time: { value: 0 },
+                    modelIndex: { value: 1 }, // Default Claret
+                    coronaSharp: { value: 6.0 },
+                    coronaIntensity: { value: 0.3 },
+                    starBaseColor: { value: initialColor }
+                },
+                vertexShader: _VS,
+                fragmentShader: _FS,
+                transparent: false
+            });
+
+            sphere = new THREE.Mesh(geometry, material);
+            scene.add(sphere);
+
+            window.addEventListener('resize', onWindowResize, false);
+            setupUI();
+            animate();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            material.uniforms.time.value = (Date.now() - startTime) * 0.001;
+            
+            // Slow rotation around Y axis
+            sphere.rotation.y += 0.0005;
+            
+            renderer.render(scene, camera);
+        }
+
+        // --- UI SETUP ---
+        function setModel(index) {
+            material.uniforms.modelIndex.value = index;
+            document.getElementById('btn-quadratic').className = (index === 0) ? 'active' : '';
+            document.getElementById('btn-claret').className = (index === 1) ? 'active' : '';
+        }
+
+        function setupUI() {
+            const params = ['coronaSharp', 'coronaIntensity'];
+            params.forEach(id => {
+                const el = document.getElementById(id);
+                const display = document.getElementById('val-' + id);
+                el.addEventListener('input', (e) => {
+                    const val = parseFloat(e.target.value);
+                    display.innerText = val.toFixed(2);
+                    material.uniforms[id].value = val;
+                });
+            });
+
+            // Handle Temperature Slider differently (updates starBaseColor uniform)
+            const tempEl = document.getElementById('starTemp');
+            const tempDisplay = document.getElementById('val-starTemp');
+            tempEl.addEventListener('input', (e) => {
+                const temp = parseInt(e.target.value);
+                tempDisplay.innerText = temp;
+                const newColor = kelvinToRGB(temp);
+                material.uniforms.starBaseColor.value = newColor;
+            });
+        }
+
+        // --- Helper: Simple Kelvin to Linear RGB ---
+        // Range 3000K to 12000K
+        function kelvinToRGB(kelvin) {
+            const t = (kelvin - 3000) / (12000 - 3000); // Normalize 0..1
+            // Simple mapping from Reddish to Bluish
+            if (t < 0.5) {
+                // 3000K (#FF331A) to 6000K (#FFE599)
+                return new THREE.Vector3(1.0, 0.2 + t * 2.0 * 0.65, 0.1 + t * 2.0 * 0.5);
+            } else {
+                // 6000K (#FFE599) to 12000K (#80CCFF)
+                const nt = (t - 0.5) * 2.0;
+                return new THREE.Vector3(1.0 - nt * 0.5, 0.85 - nt * 0.05, 0.6 + nt * 0.4);
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
