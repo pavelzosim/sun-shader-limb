@@ -16,27 +16,55 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.7);
             z-index: 100; border: 1px solid #333;
             backdrop-filter: blur(5px);
-            transition: transform 0.3s ease, opacity 0.3s ease;
         }
-        #ui-panel.minimized { transform: translateX(-300px); opacity: 0; pointer-events: none; }
         
-        .ui-header { padding: 15px 20px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
+        /* Делаем шапку кликабельной */
+        .ui-header { 
+            padding: 15px 20px; 
+            border-bottom: 1px solid #222; 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            cursor: pointer;
+            user-select: none;
+        }
         .ui-header h2 { margin: 0; font-size: 14px; color: #ffaa00; text-transform: uppercase; letter-spacing: 1px; }
         
-        #ui-toggle-btn {
-            position: absolute; top: 20px; left: 20px;
-            width: 40px; height: 40px; background: #ffaa00;
-            border: none; border-radius: 8px; cursor: pointer;
-            z-index: 101; display: none; align-items: center; justify-content: center;
-            box-shadow: 0 4px 15px rgba(255,170,0,0.3);
+        /* Стили для нижней кнопки свертывания (в стиле Limb Darkening темы) */
+        .collapse-btn-wrap {
+            padding: 0 20px 20px 20px;
         }
-        #ui-toggle-btn.visible { display: flex; }
+        .ui-collapse-btn {
+            width: 100%;
+            background: transparent;
+            border: 1px solid #ffaa00;
+            color: #ffaa00;
+            border-radius: 6px;
+            padding: 8px;
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s ease;
+        }
+        .ui-collapse-btn:hover {
+            background: #ffaa00;
+            color: #000;
+        }
 
-        .close-btn { background: none; border: none; color: #666; cursor: pointer; font-size: 18px; }
-        .close-btn:hover { color: #fff; }
-
-        .ui-content { padding: 20px; }
+        /* КЛЮЧЕВОЙ КЛАСС: скрываем контент и футер при сворачивании */
+        #ui-panel.is-collapsed .ui-content,
+        #ui-panel.is-collapsed .collapse-btn-wrap,
+        #ui-panel.is-collapsed .footer { 
+            display: none !important; 
+        }
         
+        /* Немного скругляем нижние углы шапки, когда панель закрыта */
+        #ui-panel.is-collapsed .ui-header {
+            border-bottom: none;
+            border-radius: 12px;
+        }
+
         .control-group { margin-bottom: 15px; }
         .control-group label { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; margin-bottom: 5px; text-transform: uppercase; }
         .control-group label span.value { color: #ffaa00; font-family: monospace; font-size: 13px; }
@@ -47,42 +75,32 @@
 </head>
 <body>
 
-    <button id="ui-toggle-btn" onclick="toggleUI()">⚙️</button>
-
     <div id="ui-panel">
-        <div class="ui-header">
+        <div class="ui-header" id="ui-header" title="Click to expand">
             <h2>Limb Darkening</h2>
-            <button class="close-btn" onclick="toggleUI()">×</button>
         </div>
+        
         <div class="ui-content">
-            
             <p style="font-size: 12px; color: #999; margin: 0 0 15px 0;">Visualizing Claret 2000 4-term darkening model on a full-screen flat quad.</p>
 
             <div class="control-group">
                 <label>Corona Intensity <span id="val-coronaInt" class="value">0.40</span></label>
                 <input type="range" id="coronaInt" min="0.0" max="1.0" step="0.01" value="0.40">
             </div>
-
         </div>
+
+        <div class="collapse-btn-wrap">
+            <button class="ui-collapse-btn" id="collapse-btn">Collapse Panel</button>
+        </div>
+
         <div class="footer">UE 5.7 Procedural Demo • STEP 3 • by pavelzosim.com</div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
     <script>
-        // --- GLOBAL VARIABLES ---
         let scene, camera, renderer, mesh, material;
-        const startTime = Date.now();
 
-        // UI Toggle Logic
-        function toggleUI() {
-            const panel = document.getElementById('ui-panel');
-            const btn = document.getElementById('ui-toggle-btn');
-            panel.classList.toggle('minimized');
-            btn.classList.toggle('visible');
-        }
-
-        // --- SHADERS (GLSL) ---
         const _VS = `
             varying vec2 vUv;
             void main() {
@@ -96,8 +114,6 @@
             uniform float coronaInt;
             varying vec2 vUv;
 
-            // Claret 2000 (4-term accurate model, Teff=5778K)
-            // mu = 1.0 at center, 0.0 at limb
             float limbClaret(float mu) {
                 float sqmu = sqrt(max(mu, 0.0));
                 return clamp(1.0 
@@ -109,26 +125,15 @@
             }
 
             void main() {
-                // Adjust UV to center the disk and make it perfectly round
                 vec2 p = (vUv - 0.5) * 2.0;
-                
-                // Crop to circle
                 float d = length(p);
                 if (d > 1.0) { discard; }
 
-                // mu = sqrt(1.0 - r^2) - this projects 2D distance to 3D cos theta
                 float mu = sqrt(1.0 - d * d);
-
-                // STEP 1: Calculate Limb Darkening Multiplier (Claret Model)
                 float limbMult = limbClaret(mu);
-
-                // STEP 2: Base Star Color (Orange/Yellow)
                 vec3 baseColor = vec3(1.0, 0.6, 0.1);
-
-                // STEP 3: Apply darkening
                 vec3 finalColor = baseColor * limbMult;
 
-                // STEP 4: Add Additive Corona Rim Glow (at mu close to 0)
                 float corona = pow(1.0 - mu, 8.0) * coronaInt;
                 finalColor += vec3(1.0, 0.8, 0.4) * corona;
 
@@ -136,22 +141,19 @@
             }
         `;
 
-        // --- APP INITIALIZATION ---
         function init() {
             scene = new THREE.Scene();
             camera = new THREE.Camera(); 
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Оптимизация разрешения
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
             const geometry = new THREE.PlaneBufferGeometry(2, 2);
             
             material = new THREE.ShaderMaterial({
-                uniforms: {
-                    coronaInt: { value: 0.40 }
-                },
+                uniforms: { coronaInt: { value: 0.40 } },
                 vertexShader: _VS,
                 fragmentShader: _FS
             });
@@ -161,11 +163,15 @@
 
             window.addEventListener('resize', onWindowResize, false);
             setupUI();
-            animate();
         }
 
+        // Оптимизированный ресайз с защитой от фризов
+        let resizeTimeout;
         function onWindowResize() {
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }, 100);
         }
 
         function animate() {
@@ -181,9 +187,23 @@
                 display.innerText = val.toFixed(2);
                 material.uniforms.coronaInt.value = val;
             });
+
+            // --- НАША УНИВЕРСАЛЬНАЯ ЛОГИКА ДЛЯ ЛЮБЫХ ЭФФЕКТОВ ---
+            const uiPanel = document.getElementById('ui-panel');
+            const collapseBtn = document.getElementById('collapse-btn');
+            const uiHeader = document.getElementById('ui-header');
+
+            collapseBtn.addEventListener('click', () => {
+                uiPanel.classList.add('is-collapsed');
+            });
+
+            uiHeader.addEventListener('click', () => {
+                uiPanel.classList.remove('is-collapsed');
+            });
         }
 
         init();
+        animate(); // Вынесли из init для чистоты структуры
     </script>
 </body>
 </html>
