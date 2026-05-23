@@ -4,100 +4,116 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Limb Darkening Math | UE 5.7 Procedural Demo</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/pavelzosim/atlas-framework@1b94ccf8eceef058d93848d15ee6551dc61bdf26/cdn/atlas-framework.css">
+    
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; background: #000; color: #eee; font-family: 'Segoe UI', Tahoma, sans-serif; }
-        canvas { display: block; width: 100vw; height: 100vh; }
-        
-        /* Floating & Collapsible UI */
-        #ui-panel {
-            position: absolute; top: 20px; left: 20px;
-            width: 280px; background: rgba(10, 10, 10, 0.9);
-            padding: 0; border-radius: 12px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
-            z-index: 100; border: 1px solid #333;
-            backdrop-filter: blur(5px);
+        body { 
+            margin: 0; 
+            padding: 0; 
+            overflow: hidden; 
+            background: #050505; 
         }
-        
-        /* Делаем шапку кликабельной */
-        .ui-header { 
-            padding: 15px 20px; 
-            border-bottom: 1px solid #222; 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
+
+        canvas { 
+            display: block; 
+            width: 100vw; 
+            height: 100vh; 
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .atlas-ui-wrapper {
+            position: absolute;
+            top: 25px;
+            left: 25px;
+            z-index: 100;
+            width: 340px;
+            pointer-events: none;
+        }
+
+        .atlas-shader-panel {
+            pointer-events: auto;
+        }
+
+        /* Интеграция логики схлопывания для Atlas Panel */
+        .atlas-shader-panel__header {
             cursor: pointer;
             user-select: none;
         }
-        .ui-header h2 { margin: 0; font-size: 14px; color: #ffaa00; text-transform: uppercase; letter-spacing: 1px; }
-        
-        /* Стили для нижней кнопки свертывания (в стиле Limb Darkening темы) */
-        .collapse-btn-wrap {
-            padding: 0 20px 20px 20px;
-        }
-        .ui-collapse-btn {
-            width: 100%;
-            background: transparent;
-            border: 1px solid #ffaa00;
-            color: #ffaa00;
-            border-radius: 6px;
-            padding: 8px;
-            cursor: pointer;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: all 0.2s ease;
-        }
-        .ui-collapse-btn:hover {
-            background: #ffaa00;
-            color: #000;
-        }
 
-        /* КЛЮЧЕВОЙ КЛАСС: скрываем контент и футер при сворачивании */
-        #ui-panel.is-collapsed .ui-content,
-        #ui-panel.is-collapsed .collapse-btn-wrap,
-        #ui-panel.is-collapsed .footer { 
-            display: none !important; 
+        .atlas-shader-panel.is-collapsed .atlas-shader-panel__body,
+        .atlas-shader-panel.is-collapsed .atlas-shader-panel__footer {
+            display: none !important;
         }
-        
-        /* Немного скругляем нижние углы шапки, когда панель закрыта */
-        #ui-panel.is-collapsed .ui-header {
-            border-bottom: none;
-            border-radius: 12px;
-        }
-
-        .control-group { margin-bottom: 15px; }
-        .control-group label { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; margin-bottom: 5px; text-transform: uppercase; }
-        .control-group label span.value { color: #ffaa00; font-family: monospace; font-size: 13px; }
-        input[type=range] { width: 100%; cursor: pointer; accent-color: #ffaa00; margin: 0; }
-
-        .footer { padding: 10px 20px; font-size: 10px; color: #444; text-align: center; border-top: 1px solid #222; }
     </style>
 </head>
 <body>
 
-    <div id="ui-panel">
-        <div class="ui-header" id="ui-header" title="Click to expand">
-            <h2>Limb Darkening</h2>
-        </div>
-        
-        <div class="ui-content">
-            <p style="font-size: 12px; color: #999; margin: 0 0 15px 0;">Visualizing Claret 2000 4-term darkening model on a full-screen flat quad.</p>
+    <canvas id="webgl-canvas"></canvas>
 
-            <div class="control-group">
-                <label>Corona Intensity <span id="val-coronaInt" class="value">0.40</span></label>
-                <input type="range" id="coronaInt" min="0.0" max="1.0" step="0.01" value="0.40">
+    <div class="atlas-container atlas-ui-wrapper">
+        <div class="atlas-shader-panel" id="ui-panel">
+            
+            <div class="atlas-shader-panel__header" id="ui-header" title="Click to expand">
+                <div class="atlas-shader-panel__title">Limb Darkening</div>
+                <div class="atlas-shader-panel__status">
+                    <div class="atlas-shader-panel__led"></div>
+                    ACTIVE
+                </div>
             </div>
-        </div>
 
-        <div class="collapse-btn-wrap">
-            <button class="ui-collapse-btn" id="collapse-btn">Collapse Panel</button>
-        </div>
+            <div class="atlas-shader-panel__body">
+                <div class="atlas-shader-panel__block">
+                    <div class="atlas-shader-panel__block-title">
+                        Claret 2000 Model
+                        <span class="atlas-shader-panel__block-hint">MATH</span>
+                    </div>
+                    
+                    <p style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; margin: 0 0 15px 0; line-height: 1.4;">
+                        Visualizing 4-term accurate darkening model (Teff=5778K) on a full-screen flat quad.
+                    </p>
 
-        <div class="footer">UE 5.7 Procedural Demo • STEP 3 • by pavelzosim.com</div>
+                    <div class="atlas-sp-grid">
+                        
+                        <div class="atlas-sp-prefix">val_</div>
+                        <div class="atlas-sp-label">CoronaIntensity</div>
+                        <div class="atlas-sp-value" id="val-coronaInt">0.40</div>
+                        <div class="atlas-sp-slider-wrap atlas-sp-row-full">
+                            <input type="range" class="atlas-sp-slider" id="coronaInt" min="0.0" max="1.0" step="0.01" value="0.40">
+                        </div>
+
+                    </div>
+                </div>
+                
+                <div class="atlas-sp-actions">
+                    <div class="atlas-sp-btn-wrap">
+                        <button class="atlas-sp-btn atlas-sp-btn--reset" id="collapse-btn">
+                            <span class="atlas-sp-btn__icon">⤌</span> Collapse Panel
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="atlas-shader-panel__footer">
+                <div class="atlas-shader-panel__footer-col">
+                    <div class="atlas-sp-meta-line"><span class="atlas-sp-meta-key">SRC:</span>LimbDarkening.ush</div>
+                </div>
+                <div class="atlas-shader-panel__footer-col atlas-shader-panel__footer-col--right">
+                    <div class="atlas-sp-meta-line"><span class="atlas-sp-meta-key">ENV:</span>UE 5.7</div>
+                </div>
+            </div>
+
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-
     <script>
         let scene, camera, renderer, mesh, material;
 
@@ -126,6 +142,7 @@
 
             void main() {
                 vec2 p = (vUv - 0.5) * 2.0;
+                
                 float d = length(p);
                 if (d > 1.0) { discard; }
 
@@ -145,15 +162,20 @@
             scene = new THREE.Scene();
             camera = new THREE.Camera(); 
 
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Оптимизация разрешения
+            const canvasElement = document.getElementById('webgl-canvas');
+            renderer = new THREE.WebGLRenderer({ canvas: canvasElement, antialias: true });
+            
+            // Защита от лагов: фиксируем разрешение без спама лишних пикселей
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
             renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
 
-            const geometry = new THREE.PlaneBufferGeometry(2, 2);
+            // Используем современный PlaneGeometry вместо устаревшего PlaneBufferGeometry
+            const geometry = new THREE.PlaneGeometry(2, 2);
             
             material = new THREE.ShaderMaterial({
-                uniforms: { coronaInt: { value: 0.40 } },
+                uniforms: {
+                    coronaInt: { value: 0.40 }
+                },
                 vertexShader: _VS,
                 fragmentShader: _FS
             });
@@ -163,15 +185,16 @@
 
             window.addEventListener('resize', onWindowResize, false);
             setupUI();
+            animate();
         }
 
-        // Оптимизированный ресайз с защитой от фризов
+        // Дебаунс ресайза для предотвращения тормозов GPU при разворачивании окна
         let resizeTimeout;
         function onWindowResize() {
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 renderer.setSize(window.innerWidth, window.innerHeight);
-            }, 100);
+            }, 120);
         }
 
         function animate() {
@@ -182,13 +205,14 @@
         function setupUI() {
             const el = document.getElementById('coronaInt');
             const display = document.getElementById('val-coronaInt');
+            
             el.addEventListener('input', (e) => {
                 const val = parseFloat(e.target.value);
                 display.innerText = val.toFixed(2);
                 material.uniforms.coronaInt.value = val;
             });
 
-            // --- НАША УНИВЕРСАЛЬНАЯ ЛОГИКА ДЛЯ ЛЮБЫХ ЭФФЕКТОВ ---
+            // Логика переключения состояний панели
             const uiPanel = document.getElementById('ui-panel');
             const collapseBtn = document.getElementById('collapse-btn');
             const uiHeader = document.getElementById('ui-header');
@@ -203,7 +227,6 @@
         }
 
         init();
-        animate(); // Вынесли из init для чистоты структуры
     </script>
 </body>
 </html>
